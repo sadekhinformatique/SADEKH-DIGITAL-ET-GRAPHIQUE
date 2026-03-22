@@ -1,0 +1,81 @@
+{
+  "entities": {
+    "Category": {
+      "title": "Category",
+      "description": "Service categories (e.g., Visual Identity, Digital Solutions)",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Category name" },
+        "description": { "type": "string", "description": "Category description" }
+      },
+      "required": ["name"]
+    },
+    "Service": {
+      "title": "Service",
+      "description": "A digital service offered by the agency",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Service name" },
+        "description": { "type": "string", "description": "Service description" },
+        "price": { "type": "number", "description": "Service price in FCFA" },
+        "category": { "type": "string", "description": "Category ID" },
+        "image": { "type": "string", "description": "Image URL" },
+        "created_at": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["name", "description", "price", "category"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A customer order",
+      "type": "object",
+      "properties": {
+        "customer_name": { "type": "string", "description": "Customer name" },
+        "customer_phone": { "type": "string", "description": "Customer phone" },
+        "customer_email": { "type": "string", "description": "Customer email" },
+        "total": { "type": "number", "description": "Total order amount" },
+        "status": { "type": "string", "enum": ["En attente", "Confirmée", "Terminée", "Livrée"], "description": "Order status" },
+        "created_at": { "type": "string", "format": "date-time", "description": "Order timestamp" }
+      },
+      "required": ["customer_name", "customer_phone", "total", "status"]
+    },
+    "OrderItem": {
+      "title": "OrderItem",
+      "description": "An item within an order",
+      "type": "object",
+      "properties": {
+        "order": { "type": "string", "description": "Order ID" },
+        "service": { "type": "string", "description": "Service ID" },
+        "quantity": { "type": "number", "description": "Quantity ordered" },
+        "price": { "type": "number", "description": "Price at time of order" }
+      },
+      "required": ["order", "service", "quantity", "price"]
+    },
+    "ShopSettings": {
+      "title": "ShopSettings",
+      "description": "Global shop configuration",
+      "type": "object",
+      "properties": {
+        "shop_name": { "type": "string" },
+        "logo": { "type": "string" },
+        "description": { "type": "string" },
+        "phone_number": { "type": "string" },
+        "whatsapp_number": { "type": "string" },
+        "email": { "type": "string" },
+        "address": { "type": "string" },
+        "facebook": { "type": "string" },
+        "instagram": { "type": "string" },
+        "tiktok": { "type": "string" },
+        "youtube": { "type": "string" },
+        "website": { "type": "string" }
+      },
+      "required": ["shop_name", "whatsapp_number"]
+    }
+  },
+  "firestore": {
+    "categories": { "schema": "Category", "description": "Service categories" },
+    "services": { "schema": "Service", "description": "Available services" },
+    "orders": { "schema": "Order", "description": "Customer orders" },
+    "order_items": { "schema": "OrderItem", "description": "Items in orders" },
+    "settings": { "schema": "ShopSettings", "description": "Global settings (singleton)" }
+  }
+}
