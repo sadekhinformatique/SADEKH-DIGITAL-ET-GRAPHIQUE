@@ -1,9 +1,9 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useNavigate, useLocation } from 'react-router-dom';
-import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, User } from 'firebase/auth';
-import { doc, getDoc, setDoc, collection, onSnapshot, query, orderBy, limit, addDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, User, getMultiFactorResolver, TotpMultiFactorGenerator } from 'firebase/auth';
+import { doc, getDoc, setDoc, collection, onSnapshot, query, orderBy, limit, addDoc, updateDoc, deleteDoc, serverTimestamp, writeBatch, getDocsFromServer } from 'firebase/firestore';
 import { auth, db } from './firebase';
-import { CartItem, Service, ShopSettings, Category } from './types';
+import { CartItem, Service, ShopSettings, Category, Order, OrderItem } from './types';
 import { ShoppingCart, Menu, X, Phone, Mail, MapPin, Facebook, Instagram, Youtube, Trash2, Plus, Minus, Send, ShieldCheck, FileText, Info, LayoutDashboard, LogIn, LogOut, ChevronRight, Star, CheckCircle2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { clsx, type ClassValue } from 'clsx';
@@ -91,6 +91,7 @@ interface AppContextType {
   settings: ShopSettings | null;
   categories: Category[];
   services: Service[];
+  orders: Order[];
   user: User | null;
   isAdmin: boolean;
   loading: boolean;
@@ -574,24 +575,56 @@ const Cart = () => {
   const [customerInfo, setCustomerInfo] = useState({ name: '', phone: '', email: '' });
   const navigate = useNavigate();
 
-  const handleWhatsAppOrder = () => {
+  const handleWhatsAppOrder = async () => {
     if (!customerInfo.name || !customerInfo.phone) {
       alert("Veuillez remplir votre nom et téléphone.");
       return;
     }
 
-    const cartDetails = cart.map(item => 
-      `Service : ${item.service.name}\nPrix : ${formatPrice(item.service.price)}${item.quantity > 1 ? ` (x${item.quantity})` : ''}`
-    ).join('\n\n');
+    try {
+      // 1. Save order to Firestore
+      const batch = writeBatch(db);
+      const orderRef = doc(collection(db, 'orders'));
+      const orderData = {
+        customer_name: customerInfo.name,
+        customer_phone: customerInfo.phone,
+        customer_email: customerInfo.email || '',
+        total: total,
+        status: 'En attente',
+        created_at: serverTimestamp()
+      };
+      batch.set(orderRef, orderData);
 
-    const message = `Bonjour,\n\nJe souhaite commander les services suivants :\n\n${cartDetails}\n\nTotal : ${formatPrice(total)}\n\nNom : ${customerInfo.name}\nTéléphone : ${customerInfo.phone}\nEmail : ${customerInfo.email || 'Non renseigné'}`;
-    
-    const whatsappNumber = settings?.whatsapp_number || "221770000000";
-    const encodedMessage = encodeURIComponent(message);
-    const whatsappUrl = `https://wa.me/${whatsappNumber}?text=${encodedMessage}`;
-    
-    window.open(whatsappUrl, '_blank');
-    // We could also save the order to Firestore here if needed
+      cart.forEach(item => {
+        const itemRef = doc(collection(db, 'order_items'));
+        batch.set(itemRef, {
+          order: orderRef.id,
+          service: item.service.id,
+          service_name: item.service.name,
+          quantity: item.quantity,
+          price: item.service.price
+        });
+      });
+
+      await batch.commit();
+
+      // 2. Redirect to WhatsApp
+      const cartDetails = cart.map(item => 
+        `Service : ${item.service.name}\nPrix : ${formatPrice(item.service.price)}${item.quantity > 1 ? ` (x${item.quantity})` : ''}`
+      ).join('\n\n');
+
+      const message = `Bonjour,\n\nJe souhaite commander les services suivants :\n\n${cartDetails}\n\nTotal : ${formatPrice(total)}\n\nNom : ${customerInfo.name}\nTéléphone : ${customerInfo.phone}\nEmail : ${customerInfo.email || 'Non renseigné'}`;
+      
+      const whatsappNumber = settings?.whatsapp_number || "221770000000";
+      const encodedMessage = encodeURIComponent(message);
+      const whatsappUrl = `https://wa.me/${whatsappNumber}?text=${encodedMessage}`;
+      
+      window.open(whatsappUrl, '_blank');
+      clearCart();
+      alert("Votre commande a été enregistrée ! Vous allez être redirigé vers WhatsApp.");
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'orders');
+    }
   };
 
   if (cart.length === 0) {
@@ -910,12 +943,13 @@ const Policies = () => {
 };
 
 const AdminDashboard = () => {
-  const { isAdmin, services, categories, settings } = useAppContext();
+  const { isAdmin, services, categories, settings, orders } = useAppContext();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'services' | 'orders' | 'settings'>('services');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingService, setEditingService] = useState<Service | null>(null);
   const [formData, setFormData] = useState({ name: '', description: '', price: 0, category: '', image: '' });
+  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
 
   if (!isAdmin) {
     return (
@@ -928,6 +962,26 @@ const AdminDashboard = () => {
       </div>
     );
   }
+
+  const handleTestConnection = async () => {
+    setTestStatus('testing');
+    try {
+      await getDocsFromServer(query(collection(db, 'settings'), limit(1)));
+      setTestStatus('success');
+      setTimeout(() => setTestStatus('idle'), 3000);
+    } catch (err) {
+      setTestStatus('error');
+      console.error("Manual test failed:", err);
+    }
+  };
+
+  const handleUpdateOrderStatus = async (orderId: string, newStatus: string) => {
+    try {
+      await updateDoc(doc(db, 'orders', orderId), { status: newStatus });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `orders/${orderId}`);
+    }
+  };
 
   const handleSaveService = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1017,11 +1071,29 @@ const AdminDashboard = () => {
       <div className="flex-grow p-8">
         <div className="max-w-6xl mx-auto">
           <div className="flex justify-between items-center mb-8">
-            <h1 className="text-2xl font-bold text-gray-900">
-              {activeTab === 'services' && "Gestion des Services"}
-              {activeTab === 'orders' && "Suivi des Commandes"}
-              {activeTab === 'settings' && "Paramètres de la Boutique"}
-            </h1>
+            <div className="flex items-center gap-4">
+              <h1 className="text-2xl font-bold text-gray-900">
+                {activeTab === 'services' && "Gestion des Services"}
+                {activeTab === 'orders' && "Suivi des Commandes"}
+                {activeTab === 'settings' && "Paramètres de la Boutique"}
+              </h1>
+              <button 
+                onClick={handleTestConnection}
+                className={cn(
+                  "text-xs px-3 py-1 rounded-full border transition-all flex items-center gap-2",
+                  testStatus === 'idle' && "border-gray-200 text-gray-500 hover:bg-gray-50",
+                  testStatus === 'testing' && "border-blue-200 text-blue-500 bg-blue-50 animate-pulse",
+                  testStatus === 'success' && "border-green-200 text-green-600 bg-green-50",
+                  testStatus === 'error' && "border-red-200 text-red-600 bg-red-50"
+                )}
+              >
+                <ShieldCheck size={12} />
+                {testStatus === 'idle' && "Tester Firebase"}
+                {testStatus === 'testing' && "Test en cours..."}
+                {testStatus === 'success' && "Connexion OK"}
+                {testStatus === 'error' && "Erreur Connexion"}
+              </button>
+            </div>
             {activeTab === 'services' && (
               <button 
                 onClick={() => { setEditingService(null); setFormData({ name: '', description: '', price: 0, category: categories[0]?.id || '', image: '' }); setIsModalOpen(true); }}
@@ -1082,9 +1154,66 @@ const AdminDashboard = () => {
           )}
 
           {activeTab === 'orders' && (
-            <div className="text-center py-20 bg-white rounded-2xl border border-dashed border-gray-300">
-              <ShoppingCart size={48} className="text-gray-300 mx-auto mb-4" />
-              <p className="text-gray-500">Aucune commande enregistrée pour le moment.</p>
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+              {orders.length === 0 ? (
+                <div className="text-center py-20">
+                  <ShoppingCart size={48} className="text-gray-300 mx-auto mb-4" />
+                  <p className="text-gray-500">Aucune commande enregistrée pour le moment.</p>
+                </div>
+              ) : (
+                <table className="w-full text-left">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Client</th>
+                      <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Date</th>
+                      <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Total</th>
+                      <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Statut</th>
+                      <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {orders.map(order => (
+                      <tr key={order.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="flex flex-col">
+                            <span className="font-medium text-gray-900">{order.customer_name}</span>
+                            <span className="text-xs text-gray-500">{order.customer_phone}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-sm text-gray-600">
+                          {order.created_at?.toDate ? order.created_at.toDate().toLocaleDateString('fr-FR') : 'N/A'}
+                        </td>
+                        <td className="px-6 py-4 text-sm font-bold text-blue-600">
+                          {formatPrice(order.total)}
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={cn(
+                            "px-2 py-1 rounded-full text-[10px] font-bold uppercase",
+                            order.status === 'En attente' && "bg-orange-100 text-orange-600",
+                            order.status === 'Confirmée' && "bg-blue-100 text-blue-600",
+                            order.status === 'Terminée' && "bg-green-100 text-green-600",
+                            order.status === 'Livrée' && "bg-gray-100 text-gray-600"
+                          )}>
+                            {order.status}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <select 
+                            value={order.status}
+                            onChange={(e) => handleUpdateOrderStatus(order.id, e.target.value)}
+                            className="text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            <option value="En attente">En attente</option>
+                            <option value="Confirmée">Confirmée</option>
+                            <option value="Terminée">Terminée</option>
+                            <option value="Livrée">Livrée</option>
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           )}
 
@@ -1194,19 +1323,90 @@ const AdminDashboard = () => {
 const Login = () => {
   const navigate = useNavigate();
   const { user, isAdmin } = useAppContext();
+  const [error, setError] = useState("");
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [resolver, setResolver] = useState<any>(null);
+  const [verificationCode, setVerificationCode] = useState("");
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (user && isAdmin) navigate('/admin-dashboard');
   }, [user, isAdmin, navigate]);
 
   const handleLogin = async () => {
+    setLoading(true);
+    setError("");
     try {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error("Login error:", error);
+    } catch (err: any) {
+      if (err.code === 'auth/multi-factor-auth-required') {
+        const mfaResolver = getMultiFactorResolver(auth, err);
+        setResolver(mfaResolver);
+        setMfaRequired(true);
+      } else {
+        console.error("Login error:", err);
+        setError(err.message);
+      }
+    } finally {
+      setLoading(false);
     }
   };
+
+  const handleMfaSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      const assertion = TotpMultiFactorGenerator.assertionForSignIn(resolver, verificationCode);
+      await resolver.resolveSignIn(assertion);
+    } catch (err: any) {
+      console.error("MFA Error:", err);
+      setError("Code invalide ou erreur MFA.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (mfaRequired) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+        <div className="max-w-md w-full bg-white p-10 rounded-3xl shadow-xl border border-gray-100 text-center">
+          <div className="w-20 h-20 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-8 text-white shadow-lg">
+            <ShieldCheck size={40} />
+          </div>
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">Double Authentification</h1>
+          <p className="text-gray-500 mb-8">Veuillez entrer le code de sécurité généré par votre application d'authentification.</p>
+          <form onSubmit={handleMfaSubmit} className="space-y-4">
+            <input 
+              type="text" 
+              placeholder="Code de sécurité" 
+              value={verificationCode}
+              onChange={(e) => setVerificationCode(e.target.value)}
+              className="w-full px-4 py-4 rounded-xl border border-gray-200 focus:ring-2 focus:ring-blue-500 outline-none text-center text-2xl tracking-widest font-mono"
+              maxLength={6}
+              required
+            />
+            {error && <p className="text-red-500 text-sm">{error}</p>}
+            <button 
+              type="submit"
+              disabled={loading}
+              className="w-full py-4 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all shadow-lg disabled:opacity-50"
+            >
+              {loading ? "Vérification..." : "Vérifier"}
+            </button>
+            <button 
+              type="button"
+              onClick={() => setMfaRequired(false)}
+              className="text-sm text-gray-400 hover:text-blue-600 transition-colors"
+            >
+              Annuler
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
@@ -1218,11 +1418,13 @@ const Login = () => {
         <p className="text-gray-500 mb-8">Connectez-vous pour gérer votre boutique SADEKH DIGITAL.</p>
         <button 
           onClick={handleLogin}
-          className="w-full py-4 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 font-bold rounded-xl transition-all flex items-center justify-center gap-3 shadow-sm"
+          disabled={loading}
+          className="w-full py-4 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 font-bold rounded-xl transition-all flex items-center justify-center gap-3 shadow-sm disabled:opacity-50"
         >
           <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-6 h-6" />
-          Se connecter avec Google
+          {loading ? "Connexion..." : "Se connecter avec Google"}
         </button>
+        {error && <p className="text-red-500 text-sm mt-4">{error}</p>}
         <Link to="/" className="block mt-8 text-sm text-gray-400 hover:text-blue-600 transition-colors">Retour au site</Link>
       </div>
     </div>
@@ -1235,9 +1437,26 @@ const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [settings, setSettings] = useState<ShopSettings | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [services, setServices] = useState<Service[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [user, setUser] = useState<User | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  // Connection test
+  useEffect(() => {
+    const testConnection = async () => {
+      try {
+        await getDocsFromServer(query(collection(db, 'settings'), limit(1)));
+        console.log("Firestore connection verified.");
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('the client is offline')) {
+          console.error("Please check your Firebase configuration. The client appears to be offline.");
+        }
+      }
+    };
+    testConnection();
+  }, []);
 
   useEffect(() => {
     // Auth
@@ -1335,16 +1554,25 @@ const AppProvider = ({ children }: { children: React.ReactNode }) => {
       setServices(snap.docs.map(d => ({ id: d.id, ...d.data() } as Service)));
     }, (err) => handleFirestoreError(err, OperationType.LIST, 'services'));
 
+    // Orders (Admin only)
+    let unsubOrders = () => {};
+    if (isAdmin) {
+      unsubOrders = onSnapshot(query(collection(db, 'orders'), orderBy('created_at', 'desc')), (snap) => {
+        setOrders(snap.docs.map(d => ({ id: d.id, ...d.data() } as Order)));
+      }, (err) => handleFirestoreError(err, OperationType.LIST, 'orders'));
+    }
+
     return () => {
       unsubAuth();
       unsubSettings();
       unsubCategories();
       unsubServices();
+      unsubOrders();
     };
-  }, []);
+  }, [isAdmin]);
 
   return (
-    <AppContext.Provider value={{ settings, categories, services, user, isAdmin, loading }}>
+    <AppContext.Provider value={{ settings, categories, services, orders, user, isAdmin, loading }}>
       {children}
     </AppContext.Provider>
   );
