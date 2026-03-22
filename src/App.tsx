@@ -1344,6 +1344,8 @@ const Login = () => {
         const mfaResolver = getMultiFactorResolver(auth, err);
         setResolver(mfaResolver);
         setMfaRequired(true);
+      } else if (err.code === 'auth/unauthorized-domain') {
+        setError("Ce domaine n'est pas autorisé dans la console Firebase. Veuillez ajouter votre URL Vercel dans 'Authentication > Settings > Authorized domains'.");
       } else {
         console.error("Login error:", err);
         setError(err.message);
@@ -1464,9 +1466,15 @@ const AppProvider = ({ children }: { children: React.ReactNode }) => {
       setUser(u);
       if (u) {
         // Check admin role
-        const userDoc = await getDoc(doc(db, 'users', u.uid));
+        let isAdminRole = false;
+        try {
+          const userDoc = await getDoc(doc(db, 'users', u.uid));
+          isAdminRole = userDoc.data()?.role === 'admin';
+        } catch (e) {
+          console.warn("Could not fetch user role (likely rules not deployed):", e);
+        }
         const isDefaultAdmin = u.email === "djahfarsadekh2015@gmail.com";
-        setIsAdmin(isDefaultAdmin || userDoc.data()?.role === 'admin');
+        setIsAdmin(isDefaultAdmin || isAdminRole);
       } else {
         setIsAdmin(false);
       }
