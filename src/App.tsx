@@ -1,65 +1,11 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useNavigate, useLocation } from 'react-router-dom';
-import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, User, getMultiFactorResolver, TotpMultiFactorGenerator } from 'firebase/auth';
-import { doc, getDoc, setDoc, collection, onSnapshot, query, orderBy, limit, addDoc, updateDoc, deleteDoc, serverTimestamp, writeBatch, getDocsFromServer } from 'firebase/firestore';
-import { auth, db } from './firebase';
-import { CartItem, Service, ShopSettings, Category, Order, OrderItem } from './types';
-import { ShoppingCart, Menu, X, Phone, Mail, MapPin, Facebook, Instagram, Youtube, Trash2, Plus, Minus, Send, ShieldCheck, FileText, Info, LayoutDashboard, LogIn, LogOut, ChevronRight, Star, CheckCircle2 } from 'lucide-react';
+import { CartItem, Service, ShopSettings, Category, Order } from './types';
+import { api } from './api';
+import { ShoppingCart, Menu, X, Phone, Mail, MapPin, Facebook, Instagram, Youtube, Trash2, Plus, Minus, Send, ShieldCheck, FileText, Info, LayoutDashboard, LogOut, ChevronRight, Star, CheckCircle2, LogIn, Eye, EyeOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-
-// --- Utils ---
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId: string | undefined;
-    email: string | null | undefined;
-    emailVerified: boolean | undefined;
-    isAnonymous: boolean | undefined;
-    tenantId: string | null | undefined;
-    providerInfo: {
-      providerId: string;
-      displayName: string | null;
-      email: string | null;
-      photoUrl: string | null;
-    }[];
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
-    },
-    operationType,
-    path
-  }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -92,7 +38,6 @@ interface AppContextType {
   categories: Category[];
   services: Service[];
   orders: Order[];
-  user: User | null;
   isAdmin: boolean;
   loading: boolean;
 }
@@ -108,7 +53,7 @@ const useAppContext = () => {
 // --- Components ---
 const Navbar = () => {
   const { cart, total } = useCart();
-  const { settings, isAdmin, user } = useAppContext();
+  const { settings, isAdmin } = useAppContext();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const location = useLocation();
 
@@ -134,7 +79,6 @@ const Navbar = () => {
             </Link>
           </div>
 
-          {/* Desktop Nav */}
           <div className="hidden md:flex items-center space-x-8">
             {navLinks.map((link) => (
               <Link
@@ -163,7 +107,6 @@ const Navbar = () => {
             </Link>
           </div>
 
-          {/* Mobile menu button */}
           <div className="md:hidden flex items-center gap-4">
             <Link to="/cart" className="relative p-2 text-gray-600">
               <ShoppingCart size={24} />
@@ -183,7 +126,6 @@ const Navbar = () => {
         </div>
       </div>
 
-      {/* Mobile menu */}
       <AnimatePresence>
         {isMenuOpen && (
           <motion.div
@@ -306,7 +248,6 @@ const Home = () => {
 
   return (
     <div className="flex flex-col">
-      {/* Hero Section */}
       <section className="relative h-[80vh] flex items-center justify-center overflow-hidden bg-gray-900">
         <div className="absolute inset-0 z-0">
           <img 
@@ -348,7 +289,6 @@ const Home = () => {
         </div>
       </section>
 
-      {/* Presentation */}
       <section className="py-24 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
@@ -396,7 +336,6 @@ const Home = () => {
         </div>
       </section>
 
-      {/* Services Preview */}
       <section className="py-24 bg-gray-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-16">
@@ -447,7 +386,6 @@ const Home = () => {
         </div>
       </section>
 
-      {/* Testimonials */}
       <section className="py-24 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-16">
@@ -495,7 +433,6 @@ const Services = () => {
           <p className="text-gray-600 max-w-2xl mx-auto">Choisissez l'excellence pour votre projet. Des tarifs transparents et une qualité premium.</p>
         </div>
 
-        {/* Categories Filter */}
         <div className="flex flex-wrap justify-center gap-4 mb-12">
           <button
             onClick={() => setActiveCategory('all')}
@@ -520,7 +457,6 @@ const Services = () => {
           ))}
         </div>
 
-        {/* Services Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
           {filteredServices.map(service => (
             <motion.div
@@ -582,33 +518,19 @@ const Cart = () => {
     }
 
     try {
-      // 1. Save order to Firestore
-      const batch = writeBatch(db);
-      const orderRef = doc(collection(db, 'orders'));
-      const orderData = {
+      await api.createOrder({
         customer_name: customerInfo.name,
         customer_phone: customerInfo.phone,
         customer_email: customerInfo.email || '',
         total: total,
-        status: 'En attente',
-        created_at: serverTimestamp()
-      };
-      batch.set(orderRef, orderData);
-
-      cart.forEach(item => {
-        const itemRef = doc(collection(db, 'order_items'));
-        batch.set(itemRef, {
-          order: orderRef.id,
-          service: item.service.id,
+        items: cart.map(item => ({
+          service_id: item.service.id,
           service_name: item.service.name,
           quantity: item.quantity,
           price: item.service.price
-        });
+        }))
       });
 
-      await batch.commit();
-
-      // 2. Redirect to WhatsApp
       const cartDetails = cart.map(item => 
         `Service : ${item.service.name}\nPrix : ${formatPrice(item.service.price)}${item.quantity > 1 ? ` (x${item.quantity})` : ''}`
       ).join('\n\n');
@@ -623,7 +545,7 @@ const Cart = () => {
       clearCart();
       alert("Votre commande a été enregistrée ! Vous allez être redirigé vers WhatsApp.");
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, 'orders');
+      alert("Erreur lors de la création de la commande. Veuillez réessayer.");
     }
   };
 
@@ -653,7 +575,6 @@ const Cart = () => {
         <h1 className="text-3xl font-bold text-gray-900 mb-12">Votre Panier</h1>
         
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
-          {/* Cart Items */}
           <div className="lg:col-span-2 space-y-6">
             {cart.map(item => (
               <div key={item.service.id} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col sm:flex-row gap-6 items-center">
@@ -698,7 +619,6 @@ const Cart = () => {
             </button>
           </div>
 
-          {/* Order Summary */}
           <div className="lg:col-span-1">
             <div className="bg-white p-8 rounded-3xl shadow-lg border border-gray-100 sticky top-24">
               <h2 className="text-xl font-bold text-gray-900 mb-6">Récapitulatif</h2>
@@ -774,7 +694,6 @@ const Contact = () => {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-16">
-          {/* Contact Info */}
           <div>
             <h2 className="text-2xl font-bold text-gray-900 mb-8">Informations de l'agence</h2>
             <div className="space-y-8">
@@ -817,7 +736,6 @@ const Contact = () => {
             </div>
           </div>
 
-          {/* Contact Form */}
           <div className="bg-white p-8 sm:p-12 rounded-3xl shadow-2xl shadow-blue-900/5 border border-gray-100">
             <h2 className="text-2xl font-bold text-gray-900 mb-8">Envoyez un message</h2>
             <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); alert("Message envoyé ! Nous vous répondrons bientôt."); }}>
@@ -949,7 +867,6 @@ const AdminDashboard = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingService, setEditingService] = useState<Service | null>(null);
   const [formData, setFormData] = useState({ name: '', description: '', price: 0, category: '', image: '' });
-  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
 
   if (!isAdmin) {
     return (
@@ -963,23 +880,11 @@ const AdminDashboard = () => {
     );
   }
 
-  const handleTestConnection = async () => {
-    setTestStatus('testing');
-    try {
-      await getDocsFromServer(query(collection(db, 'settings'), limit(1)));
-      setTestStatus('success');
-      setTimeout(() => setTestStatus('idle'), 3000);
-    } catch (err) {
-      setTestStatus('error');
-      console.error("Manual test failed:", err);
-    }
-  };
-
   const handleUpdateOrderStatus = async (orderId: string, newStatus: string) => {
     try {
-      await updateDoc(doc(db, 'orders', orderId), { status: newStatus });
+      await api.updateOrderStatus(orderId, newStatus);
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `orders/${orderId}`);
+      console.error(err);
     }
   };
 
@@ -987,9 +892,9 @@ const AdminDashboard = () => {
     e.preventDefault();
     try {
       if (editingService) {
-        await updateDoc(doc(db, 'services', editingService.id), formData);
+        await api.updateService(editingService.id, formData);
       } else {
-        await addDoc(collection(db, 'services'), {
+        await api.createService({
           ...formData,
           created_at: new Date().toISOString()
         });
@@ -998,16 +903,16 @@ const AdminDashboard = () => {
       setEditingService(null);
       setFormData({ name: '', description: '', price: 0, category: '', image: '' });
     } catch (err) {
-      handleFirestoreError(err, editingService ? OperationType.UPDATE : OperationType.CREATE, 'services');
+      console.error(err);
     }
   };
 
   const handleDeleteService = async (id: string) => {
     if (window.confirm("Supprimer ce service ?")) {
       try {
-        await deleteDoc(doc(db, 'services', id));
+        await api.deleteService(id);
       } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, `services/${id}`);
+        console.error(err);
       }
     }
   };
@@ -1023,16 +928,20 @@ const AdminDashboard = () => {
       address: (form.elements.namedItem('address') as HTMLInputElement).value,
     };
     try {
-      await updateDoc(doc(db, 'settings', 'global'), data);
+      await api.updateSettings(data);
       alert("Paramètres mis à jour !");
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, 'settings/global');
+      console.error(err);
     }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('admin_token');
+    window.location.href = '/login';
   };
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
-      {/* Sidebar */}
       <div className="w-64 bg-white border-r border-gray-200 hidden lg:block">
         <div className="p-6 border-b border-gray-200">
           <h2 className="text-lg font-bold text-gray-900">Admin Panel</h2>
@@ -1058,7 +967,7 @@ const AdminDashboard = () => {
           </button>
           <div className="pt-8">
             <button 
-              onClick={() => signOut(auth)}
+              onClick={handleLogout}
               className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-red-600 hover:bg-red-50 transition-all"
             >
               <LogOut size={18} /> Déconnexion
@@ -1067,33 +976,14 @@ const AdminDashboard = () => {
         </nav>
       </div>
 
-      {/* Content */}
       <div className="flex-grow p-8">
         <div className="max-w-6xl mx-auto">
           <div className="flex justify-between items-center mb-8">
-            <div className="flex items-center gap-4">
-              <h1 className="text-2xl font-bold text-gray-900">
-                {activeTab === 'services' && "Gestion des Services"}
-                {activeTab === 'orders' && "Suivi des Commandes"}
-                {activeTab === 'settings' && "Paramètres de la Boutique"}
-              </h1>
-              <button 
-                onClick={handleTestConnection}
-                className={cn(
-                  "text-xs px-3 py-1 rounded-full border transition-all flex items-center gap-2",
-                  testStatus === 'idle' && "border-gray-200 text-gray-500 hover:bg-gray-50",
-                  testStatus === 'testing' && "border-blue-200 text-blue-500 bg-blue-50 animate-pulse",
-                  testStatus === 'success' && "border-green-200 text-green-600 bg-green-50",
-                  testStatus === 'error' && "border-red-200 text-red-600 bg-red-50"
-                )}
-              >
-                <ShieldCheck size={12} />
-                {testStatus === 'idle' && "Tester Firebase"}
-                {testStatus === 'testing' && "Test en cours..."}
-                {testStatus === 'success' && "Connexion OK"}
-                {testStatus === 'error' && "Erreur Connexion"}
-              </button>
-            </div>
+            <h1 className="text-2xl font-bold text-gray-900">
+              {activeTab === 'services' && "Gestion des Services"}
+              {activeTab === 'orders' && "Suivi des Commandes"}
+              {activeTab === 'settings' && "Paramètres de la Boutique"}
+            </h1>
             {activeTab === 'services' && (
               <button 
                 onClick={() => { setEditingService(null); setFormData({ name: '', description: '', price: 0, category: categories[0]?.id || '', image: '' }); setIsModalOpen(true); }}
@@ -1181,7 +1071,7 @@ const AdminDashboard = () => {
                           </div>
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-600">
-                          {order.created_at?.toDate ? order.created_at.toDate().toLocaleDateString('fr-FR') : 'N/A'}
+                          {new Date(order.created_at).toLocaleDateString('fr-FR')}
                         </td>
                         <td className="px-6 py-4 text-sm font-bold text-blue-600">
                           {formatPrice(order.total)}
@@ -1251,7 +1141,6 @@ const AdminDashboard = () => {
         </div>
       </div>
 
-      {/* Service Modal */}
       <AnimatePresence>
         {isModalOpen && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
@@ -1322,93 +1211,31 @@ const AdminDashboard = () => {
 
 const Login = () => {
   const navigate = useNavigate();
-  const { user, isAdmin } = useAppContext();
-  const [error, setError] = useState("");
-  const [mfaRequired, setMfaRequired] = useState(false);
-  const [resolver, setResolver] = useState<any>(null);
-  const [verificationCode, setVerificationCode] = useState("");
-  const [loading, setLoading] = useState(false);
+  const { isAdmin, loading } = useAppContext();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState('');
+  const [loggingIn, setLoggingIn] = useState(false);
 
   useEffect(() => {
-    if (user && isAdmin) navigate('/admin-dashboard');
-  }, [user, isAdmin, navigate]);
+    if (!loading && isAdmin) navigate('/admin-dashboard');
+  }, [isAdmin, loading, navigate]);
 
-  const handleLogin = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-    } catch (err: any) {
-      if (err.code === 'auth/multi-factor-auth-required') {
-        const mfaResolver = getMultiFactorResolver(auth, err);
-        setResolver(mfaResolver);
-        setMfaRequired(true);
-      } else if (err.code === 'auth/unauthorized-domain') {
-        setError("Ce domaine n'est pas autorisé dans la console Firebase. Veuillez ajouter votre URL Vercel dans 'Authentication > Settings > Authorized domains'.");
-      } else {
-        console.error("Login error:", err);
-        setError(err.message);
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleMfaSubmit = async (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    setError("");
+    setLoggingIn(true);
+    setError('');
     try {
-      const assertion = TotpMultiFactorGenerator.assertionForSignIn(resolver, verificationCode);
-      await resolver.resolveSignIn(assertion);
+      const res = await api.login(email, password);
+      localStorage.setItem('admin_token', res.token);
+      window.location.href = '/admin-dashboard';
     } catch (err: any) {
-      console.error("MFA Error:", err);
-      setError("Code invalide ou erreur MFA.");
+      setError(err.message || 'Erreur de connexion');
     } finally {
-      setLoading(false);
+      setLoggingIn(false);
     }
   };
-
-  if (mfaRequired) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
-        <div className="max-w-md w-full bg-white p-10 rounded-3xl shadow-xl border border-gray-100 text-center">
-          <div className="w-20 h-20 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-8 text-white shadow-lg">
-            <ShieldCheck size={40} />
-          </div>
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">Double Authentification</h1>
-          <p className="text-gray-500 mb-8">Veuillez entrer le code de sécurité généré par votre application d'authentification.</p>
-          <form onSubmit={handleMfaSubmit} className="space-y-4">
-            <input 
-              type="text" 
-              placeholder="Code de sécurité" 
-              value={verificationCode}
-              onChange={(e) => setVerificationCode(e.target.value)}
-              className="w-full px-4 py-4 rounded-xl border border-gray-200 focus:ring-2 focus:ring-blue-500 outline-none text-center text-2xl tracking-widest font-mono"
-              maxLength={6}
-              required
-            />
-            {error && <p className="text-red-500 text-sm">{error}</p>}
-            <button 
-              type="submit"
-              disabled={loading}
-              className="w-full py-4 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all shadow-lg disabled:opacity-50"
-            >
-              {loading ? "Vérification..." : "Vérifier"}
-            </button>
-            <button 
-              type="button"
-              onClick={() => setMfaRequired(false)}
-              className="text-sm text-gray-400 hover:text-blue-600 transition-colors"
-            >
-              Annuler
-            </button>
-          </form>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
@@ -1418,15 +1245,41 @@ const Login = () => {
         </div>
         <h1 className="text-2xl font-bold text-gray-900 mb-2">Accès Administrateur</h1>
         <p className="text-gray-500 mb-8">Connectez-vous pour gérer votre boutique SADEKH DIGITAL.</p>
-        <button 
-          onClick={handleLogin}
-          disabled={loading}
-          className="w-full py-4 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 font-bold rounded-xl transition-all flex items-center justify-center gap-3 shadow-sm disabled:opacity-50"
-        >
-          <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-6 h-6" />
-          {loading ? "Connexion..." : "Se connecter avec Google"}
-        </button>
-        {error && <p className="text-red-500 text-sm mt-4">{error}</p>}
+        <form onSubmit={handleLogin} className="space-y-4">
+          <input 
+            type="email" 
+            placeholder="Email administrateur" 
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            required
+            className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+          />
+          <div className="relative">
+            <input 
+              type={showPassword ? "text" : "password"}
+              placeholder="Mot de passe" 
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              required
+              className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all pr-12"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            >
+              {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+            </button>
+          </div>
+          {error && <p className="text-red-500 text-sm">{error}</p>}
+          <button 
+            type="submit"
+            disabled={loggingIn}
+            className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all shadow-lg disabled:opacity-50 flex items-center justify-center gap-3"
+          >
+            <LogIn size={20} /> {loggingIn ? "Connexion..." : "Se connecter"}
+          </button>
+        </form>
         <Link to="/" className="block mt-8 text-sm text-gray-400 hover:text-blue-600 transition-colors">Retour au site</Link>
       </div>
     </div>
@@ -1440,147 +1293,58 @@ const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [categories, setCategories] = useState<Category[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
-  const [user, setUser] = useState<User | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Connection test
-  useEffect(() => {
-    const testConnection = async () => {
-      try {
-        await getDocsFromServer(query(collection(db, 'settings'), limit(1)));
-        console.log("Firestore connection verified.");
-      } catch (error) {
-        if (error instanceof Error && error.message.includes('the client is offline')) {
-          console.error("Please check your Firebase configuration. The client appears to be offline.");
-        }
-      }
-    };
-    testConnection();
+  const checkAuth = useCallback(async () => {
+    const token = localStorage.getItem('admin_token');
+    if (!token) {
+      setIsAdmin(false);
+      setLoading(false);
+      return;
+    }
+    try {
+      await api.checkAuth();
+      setIsAdmin(true);
+    } catch {
+      localStorage.removeItem('admin_token');
+      setIsAdmin(false);
+    }
+    setLoading(false);
+  }, []);
+
+  const fetchData = useCallback(async () => {
+    try {
+      const [s, c, sv] = await Promise.all([
+        api.getSettings(),
+        api.getCategories(),
+        api.getServices(),
+      ]);
+      setSettings(s);
+      setCategories(c);
+      setServices(sv);
+    } catch (err) {
+      console.error('Fetch data error:', err);
+    }
   }, []);
 
   useEffect(() => {
-    // Auth
-    const unsubAuth = onAuthStateChanged(auth, async (u) => {
-      setUser(u);
-      if (u) {
-        // Check admin role
-        let isAdminRole = false;
-        try {
-          const userDoc = await getDoc(doc(db, 'users', u.uid));
-          isAdminRole = userDoc.data()?.role === 'admin';
-        } catch (e) {
-          console.warn("Could not fetch user role (likely rules not deployed):", e);
-        }
-        const isDefaultAdmin = u.email === "djahfarsadekh2015@gmail.com";
-        setIsAdmin(isDefaultAdmin || isAdminRole);
-      } else {
-        setIsAdmin(false);
-      }
-      setLoading(false);
-    });
+    checkAuth();
+  }, [checkAuth]);
 
-    // Bootstrap data if empty
-    const bootstrap = async () => {
-      if (loading) return;
-      
-      try {
-        const settingsDoc = await getDoc(doc(db, 'settings', 'global'));
-        
-        // Only attempt to seed if data is missing AND user is admin
-        if (!settingsDoc.exists() && isAdmin) {
-          try {
-            await setDoc(doc(db, 'settings', 'global'), {
-              shop_name: 'SADEKH DIGITAL ET GRAPHIQUE',
-              whatsapp_number: '221770000000',
-              description: "L'expertise créative au service de votre réussite commerciale.",
-              email: "contact@sadekh.com",
-              address: "Dakar, Sénégal"
-            });
-
-            const cats = [
-              { id: 'cat1', name: 'Identité Visuelle & Graphisme' },
-              { id: 'cat2', name: 'Solutions Digitales & E-commerce' },
-              { id: 'cat3', name: 'Stratégie de Vente & Conseil' }
-            ];
-            for (const cat of cats) {
-              await setDoc(doc(db, 'categories', cat.id), { name: cat.name });
-            }
-
-            const initialServices = [
-              { name: 'Création Logo Professionnel', price: 25000, category: 'cat1', description: 'Un logo unique qui reflète l\'identité de votre marque.' },
-              { name: 'Création Site Web Vitrine', price: 150000, category: 'cat2', description: 'Un site web moderne et responsive pour présenter votre activité.' },
-              { name: 'Optimisation Boutique Shopify', price: 75000, category: 'cat2', description: 'Améliorez vos conversions avec une boutique optimisée.' },
-              { name: 'Tunnel de Vente Complet', price: 100000, category: 'cat3', description: 'Un système automatisé pour transformer vos prospects en clients.' }
-            ];
-            for (const s of initialServices) {
-              await addDoc(collection(db, 'services'), {
-                ...s,
-                created_at: new Date().toISOString()
-              });
-            }
-            console.log("Bootstrap successful");
-          } catch (err) {
-            handleFirestoreError(err, OperationType.WRITE, 'bootstrap');
-          }
-        }
-      } catch (e) {
-        // Only log if it's not a permission error for non-admins
-        if (isAdmin) {
-          console.error("Bootstrap error:", e);
-        }
-      }
-    };
-    
+  useEffect(() => {
     if (!loading) {
-      bootstrap();
+      fetchData();
     }
+  }, [loading, fetchData]);
 
-    // Settings
-    const unsubSettings = onSnapshot(doc(db, 'settings', 'global'), (doc) => {
-      if (doc.exists()) {
-        setSettings({ id: doc.id, ...doc.data() } as ShopSettings);
-      } else {
-        // Default settings if none exist
-        setSettings({
-          id: 'global',
-          shop_name: 'SADEKH DIGITAL ET GRAPHIQUE',
-          whatsapp_number: '221770000000',
-          description: "L'expertise créative au service de votre réussite commerciale."
-        });
-      }
-    }, (err) => handleFirestoreError(err, OperationType.GET, 'settings/global'));
-
-    // Categories
-    const unsubCategories = onSnapshot(collection(db, 'categories'), (snap) => {
-      setCategories(snap.docs.map(d => ({ id: d.id, ...d.data() } as Category)));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'categories'));
-
-    // Services
-    const unsubServices = onSnapshot(query(collection(db, 'services'), orderBy('created_at', 'desc')), (snap) => {
-      setServices(snap.docs.map(d => ({ id: d.id, ...d.data() } as Service)));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'services'));
-
-    // Orders (Admin only)
-    let unsubOrders = () => {};
-    if (isAdmin) {
-      unsubOrders = onSnapshot(query(collection(db, 'orders'), orderBy('created_at', 'desc')), (snap) => {
-        setOrders(snap.docs.map(d => ({ id: d.id, ...d.data() } as Order)));
-      }, (err) => handleFirestoreError(err, OperationType.LIST, 'orders'));
-    }
-
-    return () => {
-      unsubAuth();
-      unsubSettings();
-      unsubCategories();
-      unsubServices();
-      unsubOrders();
-    };
+  useEffect(() => {
+    if (!isAdmin) return;
+    api.getOrders().then(setOrders).catch(console.error);
   }, [isAdmin]);
 
   return (
-    <AppContext.Provider value={{ settings, categories, services, orders, user, isAdmin, loading }}>
+    <AppContext.Provider value={{ settings, categories, services, orders, isAdmin, loading }}>
       {children}
     </AppContext.Provider>
   );
